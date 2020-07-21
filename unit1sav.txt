@@ -1,0 +1,516 @@
+unit Unit1;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs,
+  StdCtrls, ExtCtrls;
+
+type
+  Tpt = record
+    // coordonnées World
+    x, y, z : real;
+    // coordonnées observateur
+    xo, yo, zo : real;
+    // coordonnées écran
+    x2d, y2d:integer;
+    // Eloignement moyen (= zO moyen)
+    zmoyen : real;
+    // Equation du plan de la face (de type Ax+By+Cz+D=0)
+    A,B,C,D : real ;
+  end;
+
+  TFace = array of Tpt;
+  TObj = array of Tface;
+
+
+
+  TForm1 = class(TForm)
+    PaintBox1: TPaintBox;
+    btn_Affichage: TButton;
+    ScrollBar1: TScrollBar;
+    ScrollBar2: TScrollBar;
+    Label1: TLabel;
+    Label2: TLabel;
+    btn_Charger: TButton;
+    OpenDialog1: TOpenDialog;
+    Memo1: TMemo;
+    edt_Distance: TEdit;
+    edt_Zoom: TEdit;
+    Label3: TLabel;
+    Label4: TLabel;
+    chk_Repere: TCheckBox;
+    procedure btn_AffichageClick(Sender: TObject);
+    procedure DoChangeAngle(Sender: TObject);
+    procedure DoCreate(Sender: TObject);
+    procedure btn_ChargerClick(Sender: TObject);
+  private
+    { Déclarations privées }
+  public
+    { Déclarations publiques }
+
+  end;
+
+var
+  Form1: TForm1;
+
+    obj : Tobj;
+    face : Tface;
+    som : array of TPt;
+    nbsom : integer;
+    nbface : integer;
+    sinus : array[0..359] of real;
+    cosinus :array[0..359] of real;
+    zoom : integer;
+    distance : integer;
+    TmpBmp : TBitmap;
+
+implementation
+
+const
+     pi = 3.14159;
+     tolerance = 0.001;
+{$R *.DFM}
+
+function Signe(r : real) : integer;
+begin
+     if r >= 0 then signe := 1
+     else signe := -1;
+end;
+function Arrondi(r : real) :real;
+begin
+  if abs(r) < tolerance then Arrondi := 0 else Arrondi := r;
+end;
+procedure CalculPoint(var p : Tpt; angle_h, angle_v, centrex, centrey : integer);
+begin
+     with p do
+     begin
+     // système world --> système de l'observateur
+       zo := -x*(cosinus[angle_h]*cosinus[angle_v])-y*(sinus[angle_h]*cosinus[angle_v])-z*sinus[angle_v]+distance;
+       xo := (-x*sinus[angle_h]+y*cosinus[angle_h]);
+       yo := (-x*(cosinus[angle_h]*sinus[angle_v])-y*(sinus[angle_h]*sinus[angle_v])+z*cosinus[angle_v]);
+  // projection
+      x2d := round(xo*Zoom/zo) + centrex;
+      y2d := centrey - (round(yo*Zoom/zo));
+     end;
+end;
+procedure TriFacesSimple;
+// test et pemutation en fontion de l'éloignement du centtre de la face
+// == axe z du système observateur (= z0).
+
+var
+  curface,cursommet : integer;
+  tmpface : TFace;
+  zmoyen : real;
+  permut : boolean;
+begin
+  // calcule le zmoyen (= éloignement) pour chaque face
+  for curface := 0 to length(obj)-1 do
+  begin
+    zmoyen := 0;
+    for cursommet := 0 to length(obj[curface])-1 do
+    begin
+      zmoyen := zmoyen + obj[curface][cursommet].zo;
+    end;
+    // éloignement stocké dans 1er point de la face
+    obj[curface][0].zmoyen := zmoyen / length(obj[curface]);
+  end;
+
+  // tri à bulle
+  repeat
+  permut := false;
+  for curface := 0 to length(obj)-2 do
+  begin
+    // si face n+1 est plus éloignée que face n ==> permutation
+    if obj[curface+1][0].zmoyen > obj[curface][0].zmoyen then
+    begin
+      permut := true;
+      tmpface := obj[curface];
+      obj[curface] := obj[curface+1];
+      obj[curface+1] := tmpface;
+    end;
+  end;
+  until permut = false;
+  // fin tri à bulle.
+end;
+
+function TestPQ(P,Q : TFace; angle_h, angle_v: integer) : integer;
+var
+   Ap,Bp,Cp,Dp,Aq,Bq,Cq,Dq : real;
+   i : integer;
+   position, tempo, xobs, yobs, zobs : real;
+   ok : boolean;
+begin
+     Ap := P[0].A; Bp := P[0].B; Cp := P[0].C; Dp := P[0].D;
+     Aq := Q[0].A; Bq := Q[0].B; Cq := Q[0].C; Dq := Q[0].D;
+
+     // positon observateur dansle système world;
+     xobs := Arrondi(distance*cosinus[angle_h]*cosinus[angle_v]);
+     yobs := Arrondi(distance*sinus[angle_h]*cosinus[angle_v]);
+     zobs := Arrondi(distance*sinus[angle_v]);
+
+     // De quel coté du plan P est le premier point du plan Q ?
+     tempo := Arrondi(Ap*Q[0].x + Bp*Q[0].y + Cp*Q[0].z + Dp);
+     position := signe(tempo);
+     ok := true;
+     // et les autres points de la face Q ?
+     for i := 1 to length(Q)-1 do
+     begin
+          tempo := Arrondi(Ap*Q[i].x + Bp*Q[i].y + Cp*Q[i].z + Dp);
+          if signe(tempo) <> position then
+          ok := false;  // pas du même coté !
+     end;
+
+     if ok then // tous les point de Q sont du même coté du plan P
+       begin
+         // dans quel demi espace est l'observateur ?
+         tempo := Arrondi(Ap*xobs + Bp*yobs + Cp*zobs + Dp);
+         if position = signe(tempo) then // Q du même coté que l'observateur ?
+         begin
+              TestPQ := 1;   // oui
+              Exit;
+         end
+         else  // Q est derrière P ==> permutation
+         begin
+              TestPQ := -1;
+              Exit;
+         end;
+       end;
+     // cas ou Q est "à cheval" sur P
+     // 2ème test
+     // De quel coté du plan Q est le premier point du plan P ?
+     ok := true;
+     tempo :=  Arrondi(Aq*P[0].x + Bq*P[0].y + Cq*P[0].z + Dq);
+     position := signe(tempo);
+     for i := 1 to length(P)-1 do
+     begin
+          tempo := Arrondi(Aq*P[i].x + Bq*P[i].y + Cq*P[i].z + Dq);
+          if signe(tempo) <> position then
+          ok := false;
+     end;
+     if ok then // tous les point de P sont du même coté du plan Q ?
+     begin
+       tempo := Arrondi(Aq*xobs + Bq*yobs + Cq*zobs + Dq);
+       if position = signe(tempo) then // P du même coté que l'observateur ?
+       begin
+            TestPQ := 1;
+            Exit;
+       end
+       else  // Q est derrière P ==> permutation
+       begin
+            TestPQ := -1;
+            Exit;
+       end;
+     end;
+     TestPQ := 0;
+end;
+
+
+procedure TriFacesComplet(angle_h,angle_v : integer);
+var
+  curface, nbpermut : integer;
+  tmpface : TFace;
+  x1,y1,z1,x2,y2,z2,x3,y3,z3 : real;
+  permut : boolean;
+  P,Q : TFace;
+begin
+  for curface := 0 to length(obj)-1 do
+  begin
+     // équation du plan
+     x1 := obj[curface][0].xo;
+     y1 := obj[curface][0].yo;
+     z1 := obj[curface][0].zo;
+     x2 := obj[curface][1].xo;
+     y2 := obj[curface][1].yo;
+     z2 := obj[curface][1].zo;
+     x3 := obj[curface][2].xo;
+     y3 := obj[curface][2].yo;
+     z3 := obj[curface][2].zo;
+
+     x1 := obj[curface][0].x;
+     y1 := obj[curface][0].y;
+     z1 := obj[curface][0].z;
+     x2 := obj[curface][1].x;
+     y2 := obj[curface][1].y;
+     z2 := obj[curface][1].z;
+     x3 := obj[curface][2].x;
+     y3 := obj[curface][2].y;
+     z3 := obj[curface][2].z;
+     obj[curface][0].A := y1 * (z2 -z3) + y2 * (z3 - z1) + y3 * (z1 - z2);
+     obj[curface][0].B := - x1 * (z2-z3) + x2 * (z1-z3) - x3 * (z1-z2);
+     obj[curface][0].C := x1 * (y2-y3) - x2 * (y1-y3) + x3 * (y1-y2);
+     obj[curface][0].D := - x1 * (y2*z3 - y3*z2) + x2 * (y1*z3 -y3*z1) - x3 * (y1*z2 - y2*z1);
+     if abs(obj[curface][0].A)< tolerance then obj[curface][0].A := 0;
+     if abs(obj[curface][0].B)< tolerance then obj[curface][0].B := 0;
+     if abs(obj[curface][0].C)< tolerance then obj[curface][0].C := 0;
+     if abs(obj[curface][0].D)< tolerance then obj[curface][0].D := 0;
+  end;
+
+  // tri à bulle
+  nbpermut := 0;
+  repeat
+        permut := false;
+        for curface := 0 to length(obj)-2 do
+        begin
+             P := obj[curface];
+             Q := obj[curface+1];
+             // Q devant P ?
+             case TestPQ(P,Q,angle_h,angle_v) of
+             1 :  ;// oui, on ne fait rien
+             -1 : begin
+                      permut := true;
+                      tmpface := obj[curface];
+                      obj[curface] := obj[curface+1];
+                      obj[curface+1] := tmpface;
+                      inc(nbpermut);
+                      // permutation
+                 end;
+             0 : // indéterminable --> découpe face
+             end
+        end;
+  until (permut = false) or (nbpermut > length(obj));
+end;
+
+
+procedure Reference(angle_h,angle_v,centrex,centrey : integer);
+var
+  p : array of Tpt;
+  i : integer;
+begin
+  setlength(p,4);
+  with p[0] do
+  begin
+       x := 0; y := 0; z := 0;
+  end;
+  with p[1] do
+  begin
+       x := 100; y := 0; z := 0;
+  end;
+  with p[2] do
+  begin
+       x := 0; y := 100; z := 0;
+  end;
+  with p[3] do
+  begin
+       x := 0; y := 0; z := 100;
+  end;
+  // Systeme de Référence
+  with Form1 do
+  begin
+    Label1.Caption := IntToStr(ScrollBar1.Position);
+    Label2.Caption := IntToStr(ScrollBar2.Position);
+  end;
+
+  // calcul du système de référence
+  for i := 0 to 3 do //pour chaque points
+    CalculPoint(p[i],angle_h,angle_v,centrex,centrey);
+
+  //affichage système de référence
+  with TmpBmp.Canvas do
+     begin
+          Pen.Width := 2;
+          // x
+          Pen.Color := clRed;
+          Moveto(p[0].X2d,p[0].Y2d);
+          LineTo(p[1].X2d,p[1].Y2d);
+          // y
+          Pen.Color := clGreen;
+          Moveto(p[0].X2d,p[0].Y2d);
+          LineTo(p[2].X2d,p[2].Y2d);
+          // z
+          Pen.Color := clBlue;
+          Moveto(p[0].X2d,p[0].Y2d);
+          LineTo(p[3].X2d,p[3].Y2d);
+   end;
+end;
+
+
+procedure TForm1.btn_AffichageClick(Sender: TObject);
+var
+i,j : integer;
+angle_h, angle_v: integer;
+f : array of TPoint;
+p : array of Tpt;
+centrex, centrey : integer;
+r : TRect;
+
+begin
+  // init.
+  TmpBmp := TBitmap.Create;
+  TmpBmp.Width := PaintBox1.Width;
+  TmpBmp.Height := PaintBox1.Height;
+  TmpBmp.Canvas.Lock;
+
+  distance := StrToInt (edt_Distance.Text);
+  zoom := StrToInt (edt_Zoom.Text);
+  centrex := PaintBox1.Width div 2;
+  centrey := PaintBox1.Height div 2;
+  angle_h := ScrollBar1.Position  ;
+  if angle_h<0 then angle_h := 360 + angle_h;
+  angle_v := ScrollBar2.Position  ;
+  if angle_v <0 then angle_v := 360 + angle_v;
+
+  // fond noir
+  r.Left := 0; r.Top := 0;
+  r.Right := PaintBox1.Width;
+  r.Bottom := PaintBox1.Height;
+  with TmpBmp.Canvas do
+     begin
+
+          Brush.Color := clBlack ;
+          FillRect(r);
+          Pen.Width := 2;
+     end;
+
+   // Tri des faces !
+
+   TriFacesSimple;
+   TriFacesComplet(angle_h,angle_v);
+
+   //  Affiche les FACES !!!
+   for i := 0 to length(obj)-1 do
+    begin
+      setlength(f,length(obj[i]));
+      for j := 0 to length(obj[i])-1 do
+        begin
+          CalculPoint(obj[i][j],angle_h,angle_v,centrex,centrey);
+          f[j].X := obj[i][j].x2d;
+          f[j].Y := obj[i][j].y2d;
+        end;
+      with TmpBmp.Canvas do
+      begin
+        Brush.Color := clWhite ;
+        Pen.Color := clLtGray;
+        Polygon(f);
+      end;
+    end;
+
+    // système de Référence
+    if chk_Repere.Checked then Reference(angle_h,angle_v,centrex,centrey);
+
+    Form1.PaintBox1.Canvas.Draw(0,0,TmpBmp);
+    TmpBmp.Canvas.Unlock;
+    TmpBmp.Destroy;
+end;
+
+procedure TForm1.btn_ChargerClick(Sender: TObject);
+var
+  filin : textfile;
+  s : string;
+  sl : TStringList;
+  i : integer;
+
+begin
+  nbsom := 0;
+  nbface := 0;
+  if OpenDialog1.Execute then
+  begin
+    assignFile(filin, OpenDialog1.FileName);
+    reset(filin);
+  end
+  else exit;
+
+  // entete = sommets
+  // lit jusqu'à ligne "sommets" (normalement c'est la 1ere ligne
+  // mais pourqoi pas avoir un commentaire avant
+    repeat
+      readln(filin,s);
+      s := LowerCase(trim(s));
+    until (pos('sommets',s)=1) or (eof(filin));
+    // si on atteint la fin du fichier sas lire "sommets" ==> erreur
+    if eof(filin) then
+    begin
+      Application.MessageBox('Fichier incorrect (pas de section "sommets")', 'ATTENTION', MB_ICONEXCLAMATION + MB_OK);
+      exit;
+    end;
+
+    // lecture des sommets
+    repeat
+      readln(filin,s);
+      s := LowerCase(trim(s));
+      if length(s) > 0 then
+      begin
+
+        if (pos('faces',s)<>1) then
+        begin
+          sl := TStringList.Create();
+          sl.Text := StringReplace(s, ',', '.', [rfReplaceAll]);
+
+          sl.Text := StringReplace(s, ' ', #13#10, [rfReplaceAll]);
+          inc(nbsom);
+          setlength(som,nbsom);
+          som[nbsom-1].x := StrTOFloat(sl[0]);
+          som[nbsom-1].y := StrTOFloat(sl[1]);
+          som[nbsom-1].z := StrTOFloat(sl[2]);
+          Memo1.Lines.Add(IntToStr(sl.Count));
+          sl.Free();
+        end;
+    end;
+    until (pos('faces',s)=1) or (eof(filin));
+
+    // test fin de fichier ==> erreur
+    if eof(filin) then
+    begin
+      Application.MessageBox('Fichier incorrect (pas de section "faces")', 'ATTENTION', MB_ICONEXCLAMATION + MB_OK);
+      exit;
+    end;
+
+    // lecture des faces
+    repeat
+      readln(filin,s);
+      if length(s) > 0 then
+      begin
+        inc(nbface);
+        setlength(obj,nbface);
+        sl := TStringList.Create();
+        repeat
+
+        until (True);
+        sl.Text := StringReplace(s, ' ', #13#10, [rfReplaceAll]);
+        setlength(obj[nbface-1],sl.Count);
+        Memo1.Lines.Add(IntToStr(sl.Count));
+        if sl.Count > 0 then
+        begin
+          for i := 0 to (sl.Count-1) do
+          begin
+            obj[nbface-1][i].x := som[StrToInt(sl[i])].x;
+            obj[nbface-1][i].y := som[StrToInt(sl[i])].y;
+            obj[nbface-1][i].z := som[StrToInt(sl[i])].z;
+            Memo1.Lines.Add('x = ' + FloatToStr(obj[nbface-1][i].x));
+            Memo1.Lines.Add('y = ' + FloatToStr(obj[nbface-1][i].y));
+            Memo1.Lines.Add('z = ' + FloatToStr(obj[nbface-1][i].z));
+          end; // for
+        end;  // if sl.count ...
+      end;  // length > 0
+    until eof(filin);
+    CloseFile(filin);
+    PaintBox1.Invalidate;
+end;
+
+procedure TForm1.DoChangeAngle(Sender: TObject);
+begin
+     PaintBox1.Invalidate;
+end;
+
+procedure TForm1.DoCreate(Sender: TObject);
+var
+  i : integer;
+begin
+     DoubleBuffered := True; // pour éviter le flicker
+
+     Label1.Caption := IntToStr(ScrollBar1.Position);
+     Label2.Caption := IntToStr(ScrollBar2.Position);
+     Zoom := 256;
+     distance := 256;
+     edt_Distance.Text := IntToStr(distance);
+     edt_Zoom.Text := IntToStr(Zoom);
+
+    // précalcul des sin et cos.
+     for i := 0 To 359 do
+     begin
+        sinus[i] := Sin(i * (PI / 180));
+        cosinus[i] := Cos(i * (PI / 180));
+     end;
+end;
+
+end.

@@ -1,0 +1,150 @@
+unit Unit1;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs,
+  StdCtrls, ExtCtrls;
+
+type
+  Tpt = record
+    X:integer;
+    Y:integer;
+    Z:integer;
+    X2d:integer;
+    Y2d:integer;
+  end;
+
+
+  TForm1 = class(TForm)
+    PaintBox1: TPaintBox;
+    Button1: TButton;
+    ScrollBar1: TScrollBar;
+    ScrollBar2: TScrollBar;
+    Label1: TLabel;
+    Label2: TLabel;
+    Panel1: TPanel;
+    procedure Button1Click(Sender: TObject);
+    procedure DoChangeAngle(Sender: TObject);
+    procedure DoCreate(Sender: TObject);
+  private
+    { Déclarations privées }
+  public
+    { Déclarations publiques }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+const
+     pi = 3.14159;
+{$R *.DFM}
+
+procedure TForm1.Button1Click(Sender: TObject);
+var
+a:integer;
+Val1,Val2,Val3:integer;
+nX,nY,nZ:real;
+Angle1,Angle2,Angle3: integer;
+s:array[0..359] of real;
+c:array[0..359] of real;
+p : array of Tpt;
+Zoom, CentreX, CentreY : integer;
+r : TRect;
+
+begin
+
+  For a := 0 To 359 do begin    //Pré-charge un tableau du cosinus et du sinus (plus rapide ke d'utilisé directement les fonctions in et cos)
+   s[a] := Sin(a * (PI / 180));
+   c[a] := Cos(a * (PI / 180));
+  end;
+  setlength(p,10);
+  with p[1] do
+  begin
+       x := 0; y := 0; z := 0;
+  end;
+  with p[2] do
+  begin
+       x := 100; y := 0; z := 0;
+  end;
+  with p[3] do
+  begin
+       x := 0; y := 100; z := 0;
+  end;
+  with p[4] do
+  begin
+       x := 0; y := 0; z := 100;
+  end;
+  // init.
+  Zoom := 256;
+  CentreX := PaintBox1.Width div 2;
+  CentreY := PaintBox1.Height div 2;
+  Angle1 := ScrollBar1.Position  ;
+  Angle2 := ScrollBar2.Position  ;
+  Val1 := 256;
+  Label1.Caption := IntToStr(ScrollBar1.Position);
+  Label2.Caption := IntToStr(ScrollBar2.Position);
+  r.Left := 0; r.Top := 0;
+  r.Right := PaintBox1.Width;
+  r.Bottom := PaintBox1.Height;
+
+  for a := 1 to 4 do //pour chaque points
+    with p[a] do
+   begin
+   //----ROTATION----
+     nz := -x*(c[Angle1]*c[Angle2])-y*(s[Angle1]*c[Angle2])-z*s[Angle2]+Val1;
+     nx := (-x*s[Angle1]+y*c[Angle1])/nz;
+     ny := (-x*(c[Angle1]*s[Angle2])-y*(s[Angle1]*s[Angle2])+z*c[Angle2])/nz;
+
+   //---Projection 3D->2D---
+
+
+        X2d := round(nx*Zoom)+CentreX;
+        Y2d := PaintBox1.Height - (round(ny*Zoom) +CentreY);
+   end;
+
+   //affichage
+
+     with  PaintBox1.Canvas do
+     begin
+          Brush.Color := clWhite;
+          FillRect(r);
+          Brush.Color := clBlack;
+          Moveto(p[1].X2d,p[1].Y2d);
+          LineTo(p[2].X2d,p[2].Y2d);
+          Moveto(p[1].X2d,p[1].Y2d);
+          LineTo(p[3].X2d,p[3].Y2d);
+          Moveto(p[1].X2d,p[1].Y2d);
+          LineTo(p[4].X2d,p[4].Y2d);
+
+   end;
+end;
+
+procedure TForm1.DoChangeAngle(Sender: TObject);
+begin
+     Button1Click(nil);
+
+end;
+
+procedure TForm1.DoCreate(Sender: TObject);
+var
+   r : TRect;
+begin
+     Label1.Caption := IntToStr(ScrollBar1.Position);
+     Label2.Caption := IntToStr(ScrollBar2.Position);
+
+     r.Left := 0; r.Top := 0;
+     r.Right := PaintBox1.Width;
+     r.Bottom := PaintBox1.Height;
+     PaintBox1.Canvas.Brush.Color := clWhite;
+     with  Form1.PaintBox1.Canvas do
+     begin
+          Brush.Color := clWhite;
+          FillRect(r);
+
+     end;
+end;
+
+end.
